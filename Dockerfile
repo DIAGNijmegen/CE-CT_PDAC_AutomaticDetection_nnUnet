@@ -1,6 +1,4 @@
-FROM python:3.9-slim
-
-
+FROM nvcr.io/nvidia/pytorch:21.02-py3
 
 RUN groupadd -r algorithm && useradd -m --no-log-init -r -g algorithm algorithm
 
@@ -27,7 +25,6 @@ COPY --chown=algorithm:algorithm process.py /opt/algorithm/
 
 # Copy your own dependencies to the algorithm container folder
 COPY --chown=algorithm:algorithm data_utils.py /opt/algorithm/
-COPY --chown=algorithm:algorithm preprocess_data.py /opt/algorithm/
 
 # Extend the nnUNet installation with custom trainers
 COPY --chown=algorithm:algorithm nnUNetTrainerV2_Loss_CE_checkpoints.py /tmp/nnUNetTrainerV2_Loss_CE_checkpoints.py

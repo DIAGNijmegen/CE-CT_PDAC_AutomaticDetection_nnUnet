@@ -27,20 +27,24 @@ class PDACDetectionContainer(SegmentationAlgorithm):
             ),
         )
         # input / output paths for nnUNet
-        self.nnunet_input_dir  = Path("/opt/algorithm/nnunet/input")
-        self.nnunet_output_dir = Path("/opt/algorithm/nnunet/output")
-        self.nnunet_model_dir  = Path("/opt/algorithm/nnunet/results")
+        self.nnunet_input_dir_lowres = Path("/opt/algorithm/nnunet/input_lowres")
+        self.nnunet_input_dir_fullres = Path("/opt/algorithm/nnunet/input_fullres")
+        self.nnunet_output_dir_lowres = Path("/opt/algorithm/nnunet/output_lowres")
+        self.nnunet_output_dir_fullres = Path("/opt/algorithm/nnunet/output_fullres")
+        self.nnunet_model_dir = Path("/opt/algorithm/nnunet/results")
 
         # input / output paths
-        self.ct_ip_dir         = Path("/input/images/pancreas-ct")
-        self.output_dir        = Path("/output/images/pancreas-ct-heatmap")
+        self.ct_ip_dir         = Path("/input/images/")
+        self.output_dir        = Path("/output/images/")
         self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
         self.heatmap           = self.output_dir / "heatmap.mha"
         
 
         # ensure required folders exist
-        self.nnunet_input_dir.mkdir(exist_ok=True, parents=True)
-        self.nnunet_output_dir.mkdir(exist_ok=True, parents=True)
+        self.nnunet_input_dir_lowres.mkdir(exist_ok=True, parents=True)
+        self.nnunet_input_dir_fullres.mkdir(exist_ok=True, parents=True)
+        self.nnunet_output_dir_lowres.mkdir(exist_ok=True, parents=True)
+        self.nnunet_output_dir_fullres.mkdir(exist_ok=True, parents=True)
         self.output_dir.mkdir(exist_ok=True, parents=True)
 
         print(os.listdir(self.ct_ip_dir))
@@ -54,12 +58,12 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         """
         Load CT scan and Generate Heatmap for Pancreas Cancer  
         """
-        # move input images to nnUNet format with __0000.nii.gz 
-        newpath_ct = str(self.nnunet_input_dir / "scan_0000.nii.gz")
+        # move input images to nnUNet format with __0000.nii.gz
+        # newpath_ct = str(self.nnunet_input_dir / "scan_0000.nii.gz")
         itk_img    = sitk.ReadImage(self.ct_image, sitk.sitkFloat32)
         # sitk.WriteImage(itk_img, newpath_ct)
-        sitk.WriteImage(itk_img, newpath_ct)
-        #atomic_image_write(self.ct_image, str(newpath_ct), useCompression=True)
+        # sitk.WriteImage(itk_img, newpath_ct)
+        # atomic_image_write(self.ct_image, str(newpath_ct), useCompression=True)
         
 
         #Get low resolution pancreas segmentation 
@@ -70,19 +74,26 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         initial_spacing  = np.array(original_spacing)
         if (original_size[0]>256):
             scale = original_size[0]/256
-            output_spacing = scale*original_spacing
-            resampled_image = resample_img(itk_img, out_spacing = 2*initial_spacing)
+            output_spacing = scale*initial_spacing
+            resampled_image = resample_img(itk_img, output_spacing)
+
+        # save resampled image
+        sitk.WriteImage(resampled_image, str(self.nnunet_input_dir_lowres / "scan_0000.nii.gz"))
 
         #predict pancreas mask using nnUnet
         self.predict(
+            input_dir=self.nnunet_input_dir_lowres,
+            output_dir=self.nnunet_output_dir_lowres,
             task="Task105_PancreasDownsampledres256",
             trainer="nnUNetTrainerV2"
         )
-        mask_pred_path = str(self.nnunet_output_dir / "scan.nii.gz")
+        mask_pred_path = str(self.nnunet_output_dir_lowres / "scan.nii.gz")
         mask_low_res = sitk.ReadImage(mask_pred_path, sitk.sitkFloat32)
 
-        cropped_image, coordinates = GetROIfromDownsampledSegmentation(itk_img, resampled_image, mask_low_res, 70,50,10)
-        self.ct_image = cropped_image #?????
+        cropped_image, _ = GetROIfromDownsampledSegmentation(itk_img, resampled_image, mask_low_res, 70,50,10)
+
+        # save cropped image
+        sitk.WriteImage(cropped_image, str(self.nnunet_input_dir_fullres / "scan_0000.nii.gz"))
 
         # Predict using nnUNet ensemble, averaging multiple restarts
         pred_ensemble = None
@@ -94,10 +105,12 @@ class PDACDetectionContainer(SegmentationAlgorithm):
             "nnUNetTrainerV2_Loss_CE_checkpoints2",
         ]:
             self.predict(
+                input_dir=self.nnunet_input_dir_fullres,
+                output_dir=self.nnunet_output_dir_fullres,
                 task="Task103_AllStructures",
                 trainer=trainer
             )
-            pred_path = str(self.nnunet_output_dir / "scan.npz")
+            pred_path = str(self.nnunet_output_dir_fullres / "scan.npz")
             pred = np.load(pred_path)['softmax'][1].astype('float32')
             os.remove(pred_path)
             if pred_ensemble is None:
@@ -122,9 +135,10 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         sitk.WriteImage(pred_itk_resampled, str(self.heatmap))
         subprocess.check_call(["ls", str(self.output_dir), "-al"])
 
-    def predict(self, task="Task103_AllStructures", trainer="nnUNetTrainerV2",
-                network="3d_fullres", checkpoint="model_final", folds="0,1,2,3,4", 
-                store_probability_maps=True, disable_augmentation=False, disable_patch_overlap=False):
+    def predict(self, input_dir, output_dir, task="Task103_AllStructures", trainer="nnUNetTrainerV2",
+                network="3d_fullres", checkpoint="model_final_checkpoint", folds="0,1,2,3,4", 
+                store_probability_maps=True, disable_augmentation=False, 
+                disable_patch_overlap=False):
         """
         Use trained nnUNet network to generate segmentation masks
         """
@@ -136,8 +150,8 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         cmd = [
             'nnUNet_predict',
             '-t', task,
-            '-i', str(self.nnunet_input_dir),
-            '-o', str(self.nnunet_output_dir),
+            '-i', str(input_dir),
+            '-o', str(output_dir),
             '-m', network,
             '-tr', trainer,
             '--num_threads_preprocessing', '2',
