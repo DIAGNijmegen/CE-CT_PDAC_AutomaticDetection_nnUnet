@@ -70,8 +70,7 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         ]:
             self.predict(
                 task="Task103_AllStructures",
-                trainer=trainer,
-                checkpoint="model_best",
+                trainer=trainer
             )
             pred_path = str(self.nnunet_output_dir / "scan.npz")
             pred = np.load(pred_path)['softmax'][1].astype('float32')
