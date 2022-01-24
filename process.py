@@ -14,7 +14,7 @@ from pathlib import Path
 
 # imports required for my algorithm
 import SimpleITK as sitk
-
+from data_utils import resample_img, GetROIfromDownsampledSegmentation
 
 class PDACDetectionContainer(SegmentationAlgorithm):
     def __init__(self):
@@ -36,6 +36,7 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         self.output_dir        = Path("/output/images/pancreas-ct-heatmap")
         self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
         self.heatmap           = self.output_dir / "heatmap.mha"
+        
 
         # ensure required folders exist
         self.nnunet_input_dir.mkdir(exist_ok=True, parents=True)
@@ -61,9 +62,33 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         #atomic_image_write(self.ct_image, str(newpath_ct), useCompression=True)
         
 
+        #Get low resolution pancreas segmentation 
+
+        #dowsample image to 256x256
+        original_spacing = itk_img.GetSpacing()
+        original_size    = itk_img.GetSize()
+        initial_spacing  = np.array(original_spacing)
+        if (original_size[0]>256):
+            scale = original_size[0]/256
+            output_spacing = scale*original_spacing
+            resampled_image = resample_img(itk_img, out_spacing = 2*initial_spacing)
+
+        #predict pancreas mask using nnUnet
+        self.predict(
+            task="Task105_PancreasDownsampledres256",
+            trainer="nnUNetTrainerV2"
+        )
+        mask_pred_path = str(self.nnunet_output_dir / "scan.nii.gz")
+        mask_low_res = sitk.ReadImage(mask_pred_path, sitk.sitkFloat32)
+
+        cropped_image, coordinates = GetROIfromDownsampledSegmentation(itk_img, resampled_image, mask_low_res, 70,50,10)
+        self.ct_image = cropped_image #?????
+
         # Predict using nnUNet ensemble, averaging multiple restarts
         pred_ensemble = None
         ensemble_count = 0
+
+        #also need to store the nii.gz predictions for the post processing
         for trainer in [
             "nnUNetTrainerV2_Loss_CE_checkpoints",
             "nnUNetTrainerV2_Loss_CE_checkpoints2",
@@ -86,10 +111,12 @@ class PDACDetectionContainer(SegmentationAlgorithm):
 
         # Convert nnUNet prediction back to physical space of input scan 
         pred_itk_resampled = translate_pred_to_reference_scan_from_file(
-            pred = pred_ensemble,
-            reference_scan_path = str(self.ct_image)
+            pred                = pred_ensemble,
+            reference_scan_path = str(self.ct_image) # check if self.ct_image is the cropped_ROI
         )
   
+        #add post-processing!!!
+
         # save prediction to output folder
         #atomic_image_write(pred_itk_resampled, str(self.heatmap), useCompression=True)
         sitk.WriteImage(pred_itk_resampled, str(self.heatmap))
