@@ -1,4 +1,6 @@
-FROM nvcr.io/nvidia/pytorch:21.02-py3
+FROM nvcr.io/nvidia/pytorch:21.03-py3
+
+ENV SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL=True
 
 RUN groupadd -r algorithm && useradd -m --no-log-init -r -g algorithm algorithm
 

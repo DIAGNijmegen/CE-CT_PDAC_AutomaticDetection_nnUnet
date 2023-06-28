@@ -10,11 +10,12 @@ from evalutils.validators import (
 
 # imports required for running nnUNet algorithm
 import subprocess
+from subprocess import check_output, STDOUT, CalledProcessError
 from pathlib import Path
 
 # imports required for my algorithm
 import SimpleITK as sitk
-from data_utils import resample_img, GetROIfromDownsampledSegmentation
+from data_utils import resample_img, GetROIfromDownsampledSegmentation, FPreductionPancreasMaskEnsamble
 
 class PDACDetectionContainer(SegmentationAlgorithm):
     def __init__(self):
@@ -27,18 +28,43 @@ class PDACDetectionContainer(SegmentationAlgorithm):
             ),
         )
         # input / output paths for nnUNet
-        self.nnunet_input_dir_lowres = Path("/opt/algorithm/nnunet/input_lowres")
+        self.nnunet_input_dir_lowres = Path("/opt/algorithm/nnunet/input_lowres") 
         self.nnunet_input_dir_fullres = Path("/opt/algorithm/nnunet/input_fullres")
         self.nnunet_output_dir_lowres = Path("/opt/algorithm/nnunet/output_lowres")
-        self.nnunet_output_dir_fullres = Path("/opt/algorithm/nnunet/output_fullres")
+        self.nnunet_output_dir_fullres = Path("/opt/algorithm/nnunet/output_fullwres")
         self.nnunet_model_dir = Path("/opt/algorithm/nnunet/results")
+        
+        # self.nnunet_input_dir_lowres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/input_lowres") 
+        # self.nnunet_input_dir_fullres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/input_fullres")
+        # self.nnunet_output_dir_lowres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/output_lowres")
+        # self.nnunet_output_dir_fullres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/output_fullres")
+        # self.nnunet_model_dir = '/mnt/netcache/pelvis/projects/natalia/CE-CT_PDAC_AutomaticDetection_nnUnet/nnunet/results'
 
         # input / output paths
         self.ct_ip_dir         = Path("/input/images/")
         self.output_dir        = Path("/output/images/")
+        self.output_dir_tlm    = Path(os.path.join(self.output_dir,"pancreatic-tumor-likelihood-map")) 
+        self.output_dir_seg    = Path(os.path.join(self.output_dir ,"pancreas-anatomy-and-vessel-segmentation"))
         self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
-        self.heatmap           = self.output_dir / "heatmap.mha"
-        
+        self.heatmap           = self.output_dir_tlm / "heatmap.mha"
+        self.segmentation      = self.output_dir_seg / "segmentation.mha"
+
+        # self.ct_ip_dir         = Path(DATA_INPUT)
+        # self.output_dir_tlm    = Path(os.path.join(DATA_OUTPUT,"pancreatic-tumor-likelihood-map")) # later on this should be a dicom file
+        # self.output_dir_seg    = Path(os.path.join(DATA_OUTPUT,"pancreas-anatomy-and-vessel-segmentation"))
+        # self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
+        # self.heatmap           = self.output_dir_tlm / "heatmap.mha"
+        # self.segmentation      = self.output_dir_seg / "segmentation.mha"
+
+        # input_folder           = '/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/data/input'
+        # output_folder          = '/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/data/output'
+        # self.ct_ip_dir         = Path(input_folder)
+        # self.output_dir_tlm    = Path(os.path.join(output_folder,"pancreatic-tumor-likelihood-map")) # later on this should be a dicom file
+        # self.output_dir_seg    = Path(os.path.join(output_folder,"pancreas-anatomy-and-vessel-segmentation"))
+        # self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
+        # self.heatmap           = self.output_dir_tlm / "heatmap.mha"
+        # self.segmentation      = self.output_dir_seg / "segmentation.mha"
+
 
         # ensure required folders exist
         self.nnunet_input_dir_lowres.mkdir(exist_ok=True, parents=True)
@@ -46,6 +72,10 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         self.nnunet_output_dir_lowres.mkdir(exist_ok=True, parents=True)
         self.nnunet_output_dir_fullres.mkdir(exist_ok=True, parents=True)
         self.output_dir.mkdir(exist_ok=True, parents=True)
+        self.output_dir_tlm.mkdir(exist_ok=True, parents=True)
+        self.output_dir_seg.mkdir(exist_ok=True, parents=True)
+
+
 
         print(os.listdir(self.ct_ip_dir))
 
@@ -58,28 +88,25 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         """
         Load CT scan and Generate Heatmap for Pancreas Cancer  
         """
-        # move input images to nnUNet format with __0000.nii.gz
-        # newpath_ct = str(self.nnunet_input_dir / "scan_0000.nii.gz")
         itk_img    = sitk.ReadImage(self.ct_image, sitk.sitkFloat32)
-        # sitk.WriteImage(itk_img, newpath_ct)
-        # sitk.WriteImage(itk_img, newpath_ct)
-        # atomic_image_write(self.ct_image, str(newpath_ct), useCompression=True)
-        
+        image_np   = sitk.GetArrayFromImage(itk_img)
 
         #Get low resolution pancreas segmentation 
-
         #dowsample image to 256x256
         original_spacing = itk_img.GetSpacing()
         original_size    = itk_img.GetSize()
         initial_spacing  = np.array(original_spacing)
+        print('original_size: ', original_size)
         if (original_size[0]>256):
             scale = original_size[0]/256
             output_spacing = scale*initial_spacing
             resampled_image = resample_img(itk_img, output_spacing)
 
+        print('resampled_image_size: ', resampled_image.GetSize())
+
         # save resampled image
         sitk.WriteImage(resampled_image, str(self.nnunet_input_dir_lowres / "scan_0000.nii.gz"))
-
+   
         #predict pancreas mask using nnUnet
         self.predict(
             input_dir=self.nnunet_input_dir_lowres,
@@ -88,52 +115,79 @@ class PDACDetectionContainer(SegmentationAlgorithm):
             trainer="nnUNetTrainerV2"
         )
         mask_pred_path = str(self.nnunet_output_dir_lowres / "scan.nii.gz")
-        mask_low_res = sitk.ReadImage(mask_pred_path, sitk.sitkFloat32)
+        mask_low_res = sitk.ReadImage(mask_pred_path)
 
-        cropped_image, _ = GetROIfromDownsampledSegmentation(itk_img, resampled_image, mask_low_res, 70,50,10)
-
+        cropped_image, coordinates = GetROIfromDownsampledSegmentation(itk_img, resampled_image, mask_low_res, 80,50,10)
         # save cropped image
         sitk.WriteImage(cropped_image, str(self.nnunet_input_dir_fullres / "scan_0000.nii.gz"))
 
         # Predict using nnUNet ensemble, averaging multiple restarts
         pred_ensemble = None
-        ensemble_count = 0
-
+       
         #also need to store the nii.gz predictions for the post processing
-        for trainer in [
-            "nnUNetTrainerV2_Loss_CE_checkpoints",
-            "nnUNetTrainerV2_Loss_CE_checkpoints2",
-        ]:
-            self.predict(
+        self.predict(
                 input_dir=self.nnunet_input_dir_fullres,
                 output_dir=self.nnunet_output_dir_fullres,
                 task="Task103_AllStructures",
-                trainer=trainer
-            )
-            pred_path = str(self.nnunet_output_dir_fullres / "scan.npz")
-            pred = np.load(pred_path)['softmax'][1].astype('float32')
-            os.remove(pred_path)
-            if pred_ensemble is None:
-                pred_ensemble = pred
-            else:
-                pred_ensemble += pred
-            ensemble_count += 1
+                trainer="nnUNetTrainerV2_Loss_CE_checkpoints"
+                )
+        pred_path_np = str(self.nnunet_output_dir_fullres / "scan.npz")
+        pred_path_nii = str(self.nnunet_output_dir_fullres / "scan.nii.gz")
 
-        # Average the accumulated confidence scores
-        pred_ensemble /= ensemble_count
+        pred_1 = np.load(pred_path_np)['softmax'][1].astype('float32') 
+        pred_1_nii = sitk.ReadImage(pred_path_nii)
+        self.predict(
+                input_dir=self.nnunet_input_dir_fullres,
+                output_dir=self.nnunet_output_dir_fullres,
+                task="Task103_AllStructures",
+                trainer="nnUNetTrainerV2_Loss_CE_checkpoints2"
+                )
+        pred_2 = np.load(pred_path_np)['softmax'][1].astype('float32')
+        pred_2_nii = sitk.ReadImage(pred_path_nii)
+        pred_2_np  = sitk.GetArrayFromImage(pred_2_nii)
+        #Remove tumour and tumour thrombosis segmentation and reorder 
+        pred_2_np[pred_2_np==1]=0
+        pred_2_np[pred_2_np==8]=0
+        pred_2_np[pred_2_np==2]=1
+        pred_2_np[pred_2_np==3]=2
+        pred_2_np[pred_2_np==4]=3
+        pred_2_np[pred_2_np==5]=4
+        pred_2_np[pred_2_np==6]=5
+        pred_2_np[pred_2_np==7]=6
+        pred_2_np[pred_2_np==9]=7
+
+        pred_ensemble = (pred_1 + pred_2)/2
+
+        softmax_tumor_masked = FPreductionPancreasMaskEnsamble(pred_1_nii,pred_2_nii, pred_ensemble, True)
+
+        pm_image = np.zeros(image_np.shape)
+        segmentation_np = np.zeros(image_np.shape)
+
+        pm_image[coordinates['z_start']:coordinates['z_finish'],
+                 coordinates['y_start']:coordinates['y_finish'],  
+                 coordinates['x_start']:coordinates['x_finish']] = softmax_tumor_masked
+
+        segmentation_np[coordinates['z_start']:coordinates['z_finish'],
+                        coordinates['y_start']:coordinates['y_finish'],  
+                        coordinates['x_start']:coordinates['x_finish']] = pred_2_np
+        
+        #image_np = image_np.T
+        segmentation_image = sitk.GetImageFromArray(segmentation_np)
+        segmentation_image.CopyInformation(itk_img)
+
 
         # Convert nnUNet prediction back to physical space of input scan 
         pred_itk_resampled = translate_pred_to_reference_scan_from_file(
-            pred                = pred_ensemble,
+            pred                = pm_image,
             reference_scan_path = str(self.ct_image) # check if self.ct_image is the cropped_ROI
         )
   
-        #add post-processing!!!
-
         # save prediction to output folder
-        #atomic_image_write(pred_itk_resampled, str(self.heatmap), useCompression=True)
         sitk.WriteImage(pred_itk_resampled, str(self.heatmap))
-        subprocess.check_call(["ls", str(self.output_dir), "-al"])
+        sitk.WriteImage(segmentation_image, str(self.segmentation))
+        subprocess.check_call(["ls", str(self.output_dir_tlm), "-al"])
+        subprocess.check_call(["ls", str(self.output_dir_seg), "-al"])
+
 
     def predict(self, input_dir, output_dir, task="Task103_AllStructures", trainer="nnUNetTrainerV2",
                 network="3d_fullres", checkpoint="model_final_checkpoint", folds="0,1,2,3,4", 
@@ -175,10 +229,11 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         if disable_patch_overlap:
             cmd.extend(['--step_size', '1'])
 
-        subprocess.check_call(cmd)
+        cmd_str = " ".join(cmd)
+        subprocess.check_call(cmd_str, shell=True)
 
 
-def translate_pred_to_reference_scan_from_file(pred_path, reference_scan_path):
+def translate_pred_to_reference_scan_from_file(pred, reference_scan_path, transpose = False):
     """
     Compatibility layer for `translate_pred_to_reference_scan`
     - pred_path: path to softmax / binary prediction
@@ -187,8 +242,8 @@ def translate_pred_to_reference_scan_from_file(pred_path, reference_scan_path):
     Returns:
     - SimpleITK Image pred_itk_resampled: 
     """
-    # read softmax prediction
-    pred = np.load(pred_path)['softmax'][1].astype('float32')
+    if transpose:
+        pred = pred.T
 
     # read reference scan and resample reference to spacing of training data
     reference_scan = sitk.ReadImage(reference_scan_path, sitk.sitkFloat32)

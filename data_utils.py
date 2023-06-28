@@ -1,5 +1,7 @@
 import numpy as np
 import SimpleITK as sitk
+import time
+import os
 
 def resample_img(itk_image, out_spacing=[2.0, 2.0, 2.0], is_label=False):
     original_spacing = itk_image.GetSpacing()
@@ -41,7 +43,9 @@ def GetSequencesLabel(label_array):
     return result
 
 def GetROIfromDownsampledSegmentation(full_image, image_low_res, mask_low_res, marginx, marginy, marginz):
-    mask_low_res_np = sitk.GetArrayFromImage(mask_low_res)
+    #mask_low_res_np = sitk.GetArrayFromImage(mask_low_res)
+    prediction_low_resolution_dilated = sitk.BinaryDilate(mask_low_res, (5,5,1))
+    mask_low_res_np = sitk.GetArrayFromImage(prediction_low_resolution_dilated)
     mask_non_zeros = np.nonzero(mask_low_res_np)
     if (np.sum(mask_non_zeros) == 0):
         print('ERROR NO SEGMENTATION')
@@ -119,8 +123,123 @@ def FPreductionPancreasMaskEnsamble(prediction_image_1,prediction_image_2, esamb
 
     prediction_pancreas_combined   = (prediction_pancreas_image_1_np + prediction_pancreas_image_2_np) / 2.0
     prediction_pancreas_combined   = prediction_pancreas_combined.astype(np.uint8)
-    prediction_pancreas_combined   = prediction_pancreas_combined.T
+    #prediction_pancreas_combined   = prediction_pancreas_combined.T
 
     softmax_tumor_masked           = esamble_pm_numpy * prediction_pancreas_combined 
 
     return softmax_tumor_masked
+
+# def FPreductionPancreasMaskEnsamble(prediction_image, pm_numpy, allStructures):
+
+#     dilated_prediction            = GetPancreasDilatedMaskFromPrediction(prediction_image, allStructures)
+#     prediction_pancreas_image_np = sitk.GetArrayFromImage(dilated_prediction)
+
+#     prediction_pancreas   = prediction_pancreas_image_np.astype(np.uint8)
+
+#     softmax_tumor_masked           = pm_numpy * prediction_pancreas 
+
+#     return softmax_tumor_masked
+
+
+def writeSlices(series_tag_values, prefix, new_img, out_dir, i, writer):
+    image_slice = new_img[:, :, i]
+
+    # Tags shared by the series.
+    list(
+        map(
+            lambda tag_value: image_slice.SetMetaData(
+                tag_value[0], tag_value[1]
+            ),
+            series_tag_values,
+        )
+    )
+
+    # Slice specific tags.
+    #   Instance Creation Date
+    image_slice.SetMetaData("0008|0012", time.strftime("%Y%m%d"))
+    #   Instance Creation Time
+    image_slice.SetMetaData("0008|0013", time.strftime("%H%M%S"))
+
+    # Setting the type to CT so that the slice location is preserved and
+    # the thickness is carried over.
+    image_slice.SetMetaData("0008|0060", "CT")
+
+    # (0020, 0032) image position patient determines the 3D spacing between
+    # slices.
+    #   Image Position (Patient)
+    image_slice.SetMetaData(
+        "0020|0032",
+        "\\".join(map(str, new_img.TransformIndexToPhysicalPoint((0, 0, i)))),
+    )
+    #   Instance Number
+    image_slice.SetMetaData("0020,0013", str(i))
+
+    # Write to the output directory and add the extension dcm, to force
+    # writing in DICOM format.
+    writer.SetFileName(os.path.join(out_dir, prefix + '_' + str(i) + ".dcm"))
+    writer.Execute(image_slice)
+
+def ConvertSitkImageToDicomSeries(out_dir, prefix, study_instance_UID, series_instance_UID, series_description, sitk_image, pixel_dtype):
+    writer = sitk.ImageFileWriter()
+    # Use the study/series/frame of reference information given in the meta-data
+    # dictionary and not the automatically generated information from the file IO
+    writer.KeepOriginalImageUIDOn()
+
+    modification_time = time.strftime("%H%M%S")
+    modification_date = time.strftime("%Y%m%d")
+
+    # Copy some of the tags and add the relevant tags indicating the change.
+    # For the series instance UID (0020|000e), each of the components is a number,
+    # cannot start with zero, and separated by a '.' We create a unique series ID
+    # using the date and time. Tags of interest:
+    direction = sitk_image.GetDirection()
+    series_tag_values = [
+        ("0008|0031", modification_time),  # Series Time
+        ("0008|0021", modification_date),  # Series Date
+        ("0008|0008", "DERIVED\\SECONDARY"),  # Image Type
+        ("0020|000e", series_instance_UID), # Series Instance UID
+        ("0020|000d", study_instance_UID), #Study Instance UID
+        (
+            "0020|0037",
+            "\\".join(
+                map(
+                    str,
+                    (
+                        direction[0],
+                        direction[3],
+                        direction[6],
+                        direction[1],
+                        direction[4],
+                        direction[7],
+                    ),
+                )
+            ),
+        ),  # Image Orientation
+        # (Patient)
+        ("0008|103e", series_description),  # Series Description
+    ]
+
+    if pixel_dtype == 'float':
+        # If we want to write floating point values, we need to use the rescale
+        # slope, "0028|1053", to select the number of digits we want to keep. We
+        # also need to specify additional pixel storage and representation
+        # information.
+        rescale_slope = 0.001  # keep three digits after the decimal point
+        series_tag_values = series_tag_values + [
+            ("0028|1053", str(rescale_slope)),  # rescale slope
+            ("0028|1052", "0"),  # rescale intercept
+            ("0028|0100", "16"),  # bits allocated
+            ("0028|0101", "16"),  # bits stored
+            ("0028|0102", "15"),  # high bit
+            ("0028|0103", "1"),
+        ]  # pixel representation
+
+    # Write slices to output directory
+    list(
+        map(
+            lambda i: writeSlices(series_tag_values, prefix, sitk_image, out_dir, i, writer),
+            range(sitk_image.GetDepth()),
+        )
+    )
+
+
