@@ -139,7 +139,7 @@ class PDACDetectionContainer(SegmentationAlgorithm):
 
         # Predict using nnUNet ensemble, averaging multiple restarts
         pred_ensemble = None
-       
+
         #also need to store the nii.gz predictions for the post processing
         self.predict(
                 input_dir=self.nnunet_input_dir_fullres,
@@ -150,7 +150,7 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         pred_path_np = str(self.nnunet_output_dir_fullres / "scan.npz")
         pred_path_nii = str(self.nnunet_output_dir_fullres / "scan.nii.gz")
 
-        pred_1 = np.load(pred_path_np)['softmax'][1].astype('float32') 
+        pred_1 = np.load(pred_path_np)['softmax'][1].astype(np.float32)
         pred_1_nii = sitk.ReadImage(pred_path_nii)
         self.predict(
                 input_dir=self.nnunet_input_dir_fullres,
@@ -158,10 +158,10 @@ class PDACDetectionContainer(SegmentationAlgorithm):
                 task="Task103_AllStructures",
                 trainer="nnUNetTrainerV2_Loss_CE_checkpoints2"
                 )
-        pred_2 = np.load(pred_path_np)['softmax'][1].astype('float32')
+        pred_2 = np.load(pred_path_np)['softmax'][1].astype(np.float32)
         pred_2_nii = sitk.ReadImage(pred_path_nii)
-        pred_2_np  = sitk.GetArrayFromImage(pred_2_nii)
-        #Remove tumour and tumour thrombosis segmentation and reorder 
+        pred_2_np  = sitk.GetArrayFromImage(pred_2_nii).astype(np.uint8)
+        #Remove tumour and tumour thrombosis segmentation and reorder
         pred_2_np[pred_2_np==1]=0
         pred_2_np[pred_2_np==8]=0
         pred_2_np[pred_2_np==2]=1
@@ -174,33 +174,33 @@ class PDACDetectionContainer(SegmentationAlgorithm):
 
         pred_ensemble = (pred_1 + pred_2)/2
 
-        softmax_tumor_masked = FPreductionPancreasMaskEnsamble(pred_1_nii,pred_2_nii, pred_ensemble, True)
+        softmax_tumor_masked = FPreductionPancreasMaskEnsamble(pred_1_nii, pred_2_nii, pred_ensemble, True)
 
-        pm_image = np.zeros(image_np.shape)
-        segmentation_np = np.zeros(image_np.shape)
+        pm_image = np.zeros(image_np.shape, dtype=np.float32)
+        segmentation_np = np.zeros(image_np.shape, dtype=np.uint8)
 
         pm_image[coordinates['z_start']:coordinates['z_finish'],
-                 coordinates['y_start']:coordinates['y_finish'],  
+                 coordinates['y_start']:coordinates['y_finish'],
                  coordinates['x_start']:coordinates['x_finish']] = softmax_tumor_masked
 
         segmentation_np[coordinates['z_start']:coordinates['z_finish'],
-                        coordinates['y_start']:coordinates['y_finish'],  
+                        coordinates['y_start']:coordinates['y_finish'],
                         coordinates['x_start']:coordinates['x_finish']] = pred_2_np
-        
+
         #image_np = image_np.T
         segmentation_image = sitk.GetImageFromArray(segmentation_np)
         segmentation_image.CopyInformation(itk_img)
 
 
-        # Convert nnUNet prediction back to physical space of input scan 
+        # Convert nnUNet prediction back to physical space of input scan
         pred_itk_resampled = translate_pred_to_reference_scan_from_file(
             pred                = pm_image,
             reference_scan_path = str(self.ct_image) # check if self.ct_image is the cropped_ROI
         )
-  
+
         # save prediction to output folder
-        sitk.WriteImage(pred_itk_resampled, str(self.heatmap))
-        sitk.WriteImage(segmentation_image, str(self.segmentation))
+        sitk.WriteImage(pred_itk_resampled, str(self.heatmap), True)
+        sitk.WriteImage(segmentation_image, str(self.segmentation), True)
         subprocess.check_call(["ls", str(self.output_dir_tlm), "-al"])
         subprocess.check_call(["ls", str(self.output_dir_seg), "-al"])
 
@@ -272,6 +272,3 @@ def translate_pred_to_reference_scan_from_file(pred, reference_scan_path, transp
 
 if __name__ == "__main__":
     PDACDetectionContainer().process()
-
-
-
