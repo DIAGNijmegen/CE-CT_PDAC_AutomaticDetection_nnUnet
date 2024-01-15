@@ -13,9 +13,7 @@
 #limitations under the License.
 
 
-
 import os
-import SimpleITK
 import numpy as np
 
 from evalutils import SegmentationAlgorithm
@@ -26,7 +24,6 @@ from evalutils.validators import (
 
 # imports required for running nnUNet algorithm
 import subprocess
-from subprocess import check_output, STDOUT, CalledProcessError
 from pathlib import Path
 
 # imports required for my algorithm
@@ -49,12 +46,6 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         self.nnunet_output_dir_lowres = Path("/opt/algorithm/nnunet/output_lowres")
         self.nnunet_output_dir_fullres = Path("/opt/algorithm/nnunet/output_fullwres")
         self.nnunet_model_dir = Path("/opt/algorithm/nnunet/results")
-        
-        # self.nnunet_input_dir_lowres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/input_lowres") 
-        # self.nnunet_input_dir_fullres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/input_fullres")
-        # self.nnunet_output_dir_lowres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/output_lowres")
-        # self.nnunet_output_dir_fullres = Path("/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/output_fullres")
-        # self.nnunet_model_dir = '/mnt/netcache/pelvis/projects/natalia/CE-CT_PDAC_AutomaticDetection_nnUnet/nnunet/results'
 
         # input / output paths
         self.ct_ip_dir         = Path("/input/images/")
@@ -64,23 +55,6 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
         self.heatmap           = self.output_dir_tlm / "heatmap.mha"
         self.segmentation      = self.output_dir_seg / "segmentation.mha"
-
-        # self.ct_ip_dir         = Path(DATA_INPUT)
-        # self.output_dir_tlm    = Path(os.path.join(DATA_OUTPUT,"pancreatic-tumor-likelihood-map")) # later on this should be a dicom file
-        # self.output_dir_seg    = Path(os.path.join(DATA_OUTPUT,"pancreas-anatomy-and-vessel-segmentation"))
-        # self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
-        # self.heatmap           = self.output_dir_tlm / "heatmap.mha"
-        # self.segmentation      = self.output_dir_seg / "segmentation.mha"
-
-        # input_folder           = '/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/data/input'
-        # output_folder          = '/mnt/netcache/pelvis/projects/natalia/data/test_teamplay/data/output'
-        # self.ct_ip_dir         = Path(input_folder)
-        # self.output_dir_tlm    = Path(os.path.join(output_folder,"pancreatic-tumor-likelihood-map")) # later on this should be a dicom file
-        # self.output_dir_seg    = Path(os.path.join(output_folder,"pancreas-anatomy-and-vessel-segmentation"))
-        # self.ct_image          = Path(self.ct_ip_dir).glob("*.mha")
-        # self.heatmap           = self.output_dir_tlm / "heatmap.mha"
-        # self.segmentation      = self.output_dir_seg / "segmentation.mha"
-
 
         # ensure required folders exist
         self.nnunet_input_dir_lowres.mkdir(exist_ok=True, parents=True)
@@ -138,9 +112,7 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         sitk.WriteImage(cropped_image, str(self.nnunet_input_dir_fullres / "scan_0000.nii.gz"))
 
         # Predict using nnUNet ensemble, averaging multiple restarts
-        pred_ensemble = None
-       
-        #also need to store the nii.gz predictions for the post processing
+        # also need to store the nii.gz predictions for the post-processing
         self.predict(
                 input_dir=self.nnunet_input_dir_fullres,
                 output_dir=self.nnunet_output_dir_fullres,
@@ -186,8 +158,7 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         segmentation_np[coordinates['z_start']:coordinates['z_finish'],
                         coordinates['y_start']:coordinates['y_finish'],  
                         coordinates['x_start']:coordinates['x_finish']] = pred_2_np
-        
-        #image_np = image_np.T
+
         segmentation_image = sitk.GetImageFromArray(segmentation_np)
         segmentation_image.CopyInformation(itk_img)
 
@@ -272,6 +243,3 @@ def translate_pred_to_reference_scan_from_file(pred, reference_scan_path, transp
 
 if __name__ == "__main__":
     PDACDetectionContainer().process()
-
-
-
