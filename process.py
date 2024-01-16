@@ -30,6 +30,7 @@ from pathlib import Path
 import SimpleITK as sitk
 from data_utils import resample_img, GetROIfromDownsampledSegmentation, FPreductionPancreasMaskEnsamble
 
+
 class PDACDetectionContainer(SegmentationAlgorithm):
     def __init__(self):
         super().__init__(
@@ -113,23 +114,23 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         # Predict using nnUNet ensemble, averaging multiple restarts
         # also need to store the nii.gz predictions for the post-processing
 
-         self.predict(
-                input_dir=self.nnunet_input_dir_fullres,
-                output_dir=self.nnunet_output_dir_fullres,
-                task="Task103_AllStructures",
-                trainer="nnUNetTrainerV2_Loss_CE_checkpoints"
-                )
+        self.predict(
+            input_dir=self.nnunet_input_dir_fullres,
+            output_dir=self.nnunet_output_dir_fullres,
+            task="Task103_AllStructures",
+            trainer="nnUNetTrainerV2_Loss_CE_checkpoints"
+        )
         pred_path_np = str(self.nnunet_output_dir_fullres / "scan.npz")
         pred_path_nii = str(self.nnunet_output_dir_fullres / "scan.nii.gz")
 
         pred_1 = np.load(pred_path_np)['softmax'][1].astype(np.float32)
         pred_1_nii = sitk.ReadImage(pred_path_nii)
         self.predict(
-                input_dir=self.nnunet_input_dir_fullres,
-                output_dir=self.nnunet_output_dir_fullres,
-                task="Task103_AllStructures",
-                trainer="nnUNetTrainerV2_Loss_CE_checkpoints2"
-                )
+            input_dir=self.nnunet_input_dir_fullres,
+            output_dir=self.nnunet_output_dir_fullres,
+            task="Task103_AllStructures",
+            trainer="nnUNetTrainerV2_Loss_CE_checkpoints2"
+        )
         pred_2 = np.load(pred_path_np)['softmax'][1].astype(np.float32)
         pred_2_nii = sitk.ReadImage(pred_path_nii)
         pred_2_np  = sitk.GetArrayFromImage(pred_2_nii).astype(np.uint8)
