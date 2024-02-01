@@ -32,7 +32,7 @@ from data_utils import resample_img, GetROIfromDownsampledSegmentation, FPreduct
 
 
 class PDACDetectionContainer(SegmentationAlgorithm):
-    def __init__(self):
+    def __init__(self, output_raw_heatmap: bool = False):
         super().__init__(
             validators=dict(
                 input_image=(
@@ -41,6 +41,9 @@ class PDACDetectionContainer(SegmentationAlgorithm):
                 )
             ),
         )
+        # configure algorithm options
+        self.output_raw_heatmap = output_raw_heatmap
+
         # input / output paths for nnUNet
         self.nnunet_input_dir_lowres = Path("/opt/algorithm/nnunet/input_lowres") 
         self.nnunet_input_dir_fullres = Path("/opt/algorithm/nnunet/input_fullres")
@@ -51,9 +54,10 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         # input / output paths
         self.ct_ip_dir         = Path("/input/images/")
         self.output_dir        = Path("/output/images/")
-        self.output_dir_tlm    = Path(os.path.join(self.output_dir,"pancreatic-tumor-likelihood-map")) 
-        self.output_dir_seg    = Path(os.path.join(self.output_dir ,"pancreas-anatomy-and-vessel-segmentation"))
+        self.output_dir_tlm    = self.output_dir / "pancreatic-tumor-likelihood-map"
+        self.output_dir_seg    = self.output_dir / "pancreas-anatomy-and-vessel-segmentation"
         self.heatmap           = self.output_dir_tlm / "heatmap.mha"
+        self.heatmap_raw       = self.output_dir_tlm / "heatmap_raw.mha"
         self.segmentation      = self.output_dir_seg / "segmentation.mha"
 
         # ensure required folders exist
@@ -177,6 +181,23 @@ class PDACDetectionContainer(SegmentationAlgorithm):
         subprocess.check_call(["ls", str(self.output_dir_tlm), "-al"])
         subprocess.check_call(["ls", str(self.output_dir_seg), "-al"])
 
+        # if output raw heatmap option is enabled, output the unmasked tumor likelihood map...
+        if self.output_raw_heatmap:
+            # zero pad the raw heatmap to match the input image dimensions
+            pm_raw_image = np.zeros(image_np.shape, dtype=np.float32)
+            pm_raw_image[
+                coordinates['z_start']:coordinates['z_finish'],
+                coordinates['y_start']:coordinates['y_finish'],
+                coordinates['x_start']:coordinates['x_finish']
+            ] = pred_ensemble  # softmax_tumor (not masked)
+            # convert nnUNet prediction back to physical space of input scan
+            pred_raw_itk_resampled = translate_pred_to_reference_scan_from_file(
+                pred                = pm_raw_image,
+                reference_scan_path = str(self.ct_image)
+            )
+            # save prediction to output folder
+            sitk.WriteImage(pred_raw_itk_resampled, str(self.heatmap_raw), True)
+
 
     def predict(self, input_dir, output_dir, task="Task103_AllStructures", trainer="nnUNetTrainerV2",
                 network="3d_fullres", checkpoint="model_final_checkpoint", folds="0,1,2,3,4", 
@@ -244,4 +265,4 @@ def translate_pred_to_reference_scan_from_file(pred, reference_scan_path, transp
 
 
 if __name__ == "__main__":
-    PDACDetectionContainer().process()
+    PDACDetectionContainer(output_raw_heatmap=False).process()
